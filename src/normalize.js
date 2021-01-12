@@ -50,14 +50,61 @@ const extractImage = async (image, ctx) => {
   }
 };
 
-const extractFields = async (item, ctx) => {
+const extractRichText = async (id, item, field, ctx) => {
+  const { cache, touchNode, createNode, createNodeId, createContentDigest } = ctx;
+
+  const content = item[field] || '';
+  const contentDigest = createContentDigest(content);
+
+  let nodeId;
+
+  const mediaDataCacheKey = `strapi-richtext-${contentDigest}`;
+  const cacheMediaData = await cache.get(mediaDataCacheKey);
+
+  if (cacheMediaData) {
+    nodeId = cacheMediaData.nodeId;
+    touchNode({ nodeId });
+  }
+
+  if (!nodeId) {
+    const newNode = {
+      id: createNodeId(contentDigest),
+      children: [],
+      parent: null,
+      internal: {
+        content,
+        type: 'StrapiRichText',
+        mediaType: 'text/markdown',
+        contentDigest,
+      }
+    };
+
+    await createNode(newNode);
+
+    nodeId = newNode.id;
+
+    await cache.set(mediaDataCacheKey, { nodeId });
+  }
+
+  delete item[field];
+  item[`${field}___NODE`] = nodeId;
+};
+
+const extractFields = async (maps, item, ctx, path, nodeId = path) => {
   if (isImage(item)) {
     return extractImage(item, ctx);
   }
 
   if (Array.isArray(item)) {
+    let i = 0;
     for (const element of item) {
-      await extractFields(element, ctx);
+      if (maps.richTextPaths[path]) {
+        await extractRichText(nodeId, item, i, ctx);
+        continue;
+      }
+
+      await extractFields(maps, element, ctx, path, `${nodeId}.${i}`);
+      ++i;
     }
 
     return;
@@ -65,7 +112,14 @@ const extractFields = async (item, ctx) => {
 
   if (isObject(item)) {
     for (const key in item) {
-      await extractFields(item[key], ctx);
+      const newPath = `${path}.${key}`;
+
+      if (maps.richTextPaths[newPath]) {
+        await extractRichText(nodeId, item, key, ctx);
+        continue;
+      }
+
+      await extractFields(maps, item[key], ctx, newPath, `${nodeId}.${key}`);
     }
 
     return;
@@ -73,6 +127,6 @@ const extractFields = async (item, ctx) => {
 };
 
 // Downloads media from image type fields
-exports.downloadMediaFiles = async (entities, ctx) => {
-  return Promise.all(entities.map((entity) => extractFields(entity, ctx)));
+exports.downloadMediaFiles = async (name, maps, entities, ctx) => {
+  return Promise.all(entities.map((entity, i) => extractFields(maps, entity, ctx, name, `${name}.${i}`)));
 };

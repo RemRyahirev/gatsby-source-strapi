@@ -1,7 +1,7 @@
 import pluralize from 'pluralize';
 import { capitalize } from 'lodash';
 
-import fetchData from './fetch';
+import { fetchData, fetchMetadata } from './fetch';
 import { Node } from './nodes';
 import normalize from './normalize';
 import authentication from './authentication';
@@ -17,15 +17,15 @@ const toTypeInfo = (type, { single = false }) => {
 const contentTypeToTypeInfo = toTypeInfo;
 const singleTypeToTypeInfo = (singleType) => toTypeInfo(singleType, { single: true });
 
-const fetchEntities = async ({ endpoint }, ctx) => {
+const fetchEntities = async (maps, { endpoint, name }, ctx) => {
   const entities = await fetchData(endpoint, ctx);
-  await normalize.downloadMediaFiles(entities, ctx);
+  await normalize.downloadMediaFiles(name, maps, entities, ctx);
 
   return entities;
 };
 
 exports.sourceNodes = async (
-  { store, actions, cache, reporter, getNode, getNodes, createNodeId },
+  { store, actions, cache, reporter, getNode, getNodes, createNodeId, createContentDigest },
   { apiURL = 'http://localhost:1337', loginData = {}, queryLimit = 100, ...options }
 ) => {
   const { createNode, deleteNode, touchNode } = actions;
@@ -42,6 +42,7 @@ exports.sourceNodes = async (
     jwtToken,
     reporter,
     touchNode,
+    createContentDigest,
   };
 
   // Start activity, Strapi data fetching
@@ -53,14 +54,17 @@ exports.sourceNodes = async (
 
   const types = [...contentTypes, ...singleTypes];
 
+  const maps = await fetchMetadata(ctx);
+
   // Execute the promises
-  const entities = await Promise.all(types.map((type) => fetchEntities(type, ctx)));
+  const entities = await Promise.all(types.map((type) => fetchEntities(maps, type, ctx)));
 
   // new created nodes
   const newNodes = [];
 
   // Fetch existing strapi nodes
-  const existingNodes = getNodes().filter((n) => n.internal.owner === `gatsby-source-strapi`);
+  const existingNodes = getNodes()
+    .filter((n) => n.internal.owner === `gatsby-source-strapi` && n.internal.type !== 'StrapiRichText');
 
   // Touch each one of them
   existingNodes.forEach((n) => touchNode({ nodeId: n.id }));
